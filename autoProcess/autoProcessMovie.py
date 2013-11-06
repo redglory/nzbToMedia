@@ -329,3 +329,264 @@ def process(dirName, nzbName=None, status=0, clientAgent = "manual", download_id
         else: # The status hasn't changed. we have waited 2 minutes which is more than enough. uTorrent can resule seeding now. 
             Logger.warning("The movie does not appear to have changed status after %s minutes. Please check CouchPotato Logs", wait_for)
             return 1 # failure
+
+def get_xbmc_json_obj():
+    
+    config = ConfigParser.ConfigParser()
+    configFilename = os.path.join(os.path.dirname(sys.argv[0]), "autoProcessMedia.cfg")
+    
+    if not os.path.isfile(configFilename):
+        Logger.error("You need an autoProcessMedia.cfg file - did you rename and edit the .sample?")
+        return 1 # failure
+
+    config.read(configFilename)
+
+    #setings for xbmc part of script
+    host = config.get("XBMC", "host")
+    port = config.get("XBMC", "port")
+    username = config.get("XBMC", "username")
+    password = config.get("XBMC", "password")
+    http_address = 'http://%s:%s/jsonrpc' % (host, port)
+    
+    try:
+         import json
+    except ImportError:
+         import simplejson as json
+    import urllib2, base64
+
+    class XBMCJSON:
+
+         def __init__(self, server):
+              self.server = server
+              self.version = '2.0'
+
+         def __call__(self, **kwargs):
+              method = '.'.join(map(str, self.n))
+              self.n = []
+              return XBMCJSON.__dict__['Request'](self, method, kwargs)
+
+         def __getattr__(self,name):
+              if not self.__dict__.has_key('n'):
+                    self.n=[]
+              self.n.append(name)
+              return self
+
+         def Request(self, method, kwargs):
+              data = [{}]
+              data[0]['method'] = method
+              data[0]['params'] = kwargs
+              data[0]['jsonrpc'] = self.version
+              data[0]['id'] = 1
+
+              data = json.JSONEncoder().encode(data)
+              content_length = len(data)
+
+              content = {
+                    'Content-Type': 'application/json',
+                    'Content-Length': content_length,
+              }
+      
+              request = urllib2.Request(self.server, data, content)
+              base64string = base64.encodestring('%s:%s' % (username, password)).replace('\n', '')
+              request.add_header("Authorization", "Basic %s" % base64string)
+
+              f = urllib2.urlopen(request)
+              response = f.read()
+              f.close()
+              response = json.JSONDecoder().decode(response)
+
+              try:
+                    return response[0]['result']                
+              except:
+                    return response[0]['error']
+                    
+    xbmc = XBMCJSON(http_address)
+    Logger.info('- XBMC JSON Object successfully created!')
+    return xbmc
+ 
+def update_videolibrary(xbmc):
+
+    ## Command to update XBMC Video library
+    xbmc.VideoLibrary.Scan()
+    Logger.info('- XBMC: Updating Video Library.' )
+
+#### END ### 
+
+def runCmd(cmd):
+    Logger.info(str(shlex.split(cmd)))
+    proc = subprocess.Popen(shlex.split(cmd), 
+                 stdout=subprocess.PIPE, 
+                 stderr=subprocess.PIPE, 
+                 stdin=subprocess.PIPE)
+    out, err = proc.communicate()
+    ret = proc.returncode
+    proc.wait()
+    return (ret, out, err, proc)
+    
+def run_ember():
+
+    ###########################################
+    #### Ember Media Manager Auto Scraping ####
+    ###########################################
+    ### Command lines
+    ### -------------
+    ### -fullask
+    ### -fullauto
+    ### -missask
+    ### -missauto
+    ### -newask
+    ### -newauto
+    ### -markask
+    ### -markauto
+    ### -file
+    ### -folder
+    ### -export
+    ### -template
+    ### -resize
+    ### -all
+    ### -nfo
+    ### -posters
+    ### -fanart
+    ### -extra
+    ### -nowindow
+    ### -run
+    ###########################################
+
+    config = ConfigParser.ConfigParser()
+    configFilename = os.path.join(os.path.dirname(sys.argv[0]), "autoProcessMedia.cfg")
+    
+    if not os.path.isfile(configFilename):
+        Logger.error("You need an autoProcessMedia.cfg file - did you rename and edit the .sample?")
+        return 1 # failure
+
+    config.read(configFilename)
+
+    #setings for Ember Media Manager part of script
+    emberMM_path   = config.get("EmberMM", "path")
+    emberMM_params = config.get("EmberMM", "params")
+    cmd_line = emberMM_path + emberMM_params
+    Logger.info(cmd_line)
+
+    # Lauch Ember Media Manager and store PID for future kill
+    startTime = datetime.datetime.now()
+    returnCode, stdOut, stdErr, sp = runCmd(cmd_line) 
+    Logger.info('- Ember Media Manager: running on PID: (' + str(sp.pid) + ')' + ' started at: ' + str(startTime))
+    endTime = datetime.datetime.now()
+    # Kill Lauch Media Manager's PID
+    subprocess.call("taskkill /F /T /PID %i"%sp.pid)    
+    Logger.info('- Ember Media Manager ran for ' + str((endTime - startTime)))    
+    Logger.info('- Killed Ember Media Manager on PID: (' + str(sp.pid) + ')' )    
+    # Return Ember processing code
+    return returnCode    
+
+def run_artdownloader(movie, xbmc):
+    #####################################################################################################################
+    ###                  $$$ Art types $$$               ######      $$$ Mediatypes $$$  ######   $$$ Medianames $$$  ###
+    #####################################################################################################################
+    #                          Movies                      ##         mediatype=movie       #                           #
+    #------------------------------------------------------##        mediatype=tvshow       # dbid=$INFO[ListItem.DBID] #                             #
+    # poster | fanart | extrafanart | extrathumbs | thumb  ##      mediatype=musicvideo     #                           #
+    # clearlogo | clearart | discart | banner              ##                               #                           #
+    #####################################################################################################################
+    #                          TV Shows                    ##
+    #------------------------------------------------------##
+    # poster | clearlogo | fanart | extrafanart | banner   ##
+    # seasonposter | extrathumbs | clearart | tvthumb      ##
+    # seasonthumb | seasonbanner | characterart            ##
+    #########################################################
+    #                        Musicvideos                   ##
+    #------------------------------------------------------##
+    # poster | fanart | extrafanart | clearart | discart   ##
+    # clearlogo | extrathumbs                              ##
+    #####################################################################################################################
+    #                                           $$$ RunScript Command examples $$$                                      #
+    #-------------------------------------------------------------------------------------------------------------------#
+    #       XBMC.runscript(script.artwork.downloader, mode=custom, mediatype=movie, silent=true, extrafanart)           #
+    #####################################################################################################################
+    a=1
+
+def get_url(http_address, mode, output, apikey):
+    if mode == "qstatus":
+        url = http_address + "/api?mode=" + mode + '&output=xml&apikey=' + apikey
+    elif mode == "history":
+        url = http_address + "/api?mode=" + mode + '&start=0&limit=4&output=' + output + '&apikey=' + apikey
+    return url    
+
+def check_sabnzbd():
+
+    ### Read SABnzbd config settings
+    config = ConfigParser.ConfigParser()
+    configFilename = os.path.join(os.path.dirname(sys.argv[0]), "autoProcessMedia.cfg")
+    
+    if not os.path.isfile(configFilename):
+        Logger.error("You need an autoProcessMedia.cfg file - did you rename and edit the .sample?")
+        return 1 # failure
+
+    config.read(configFilename)
+
+# setings for xbmc part of script
+    apikey = config.get("SABnzbd", "apikey")
+    host = config.get("SABnzbd", "host")
+    port = config.get("SABnzbd", "port")
+    username = config.get("SABnzbd", "username")
+    password = config.get("SABnzbd", "password")
+    http_address = 'http://%s:%s/sabnzbd' % (host, port)
+
+    ### Wait for SABnzbd to finish all downloads
+
+    # Get URL for Queue Status
+    url = get_url(http_address, 'qstatus', 'xml', apikey)
+    
+    # Load the queue:
+    queue = urllib2.urlopen(url)
+    queuedata = queue.read()
+    queue.close()
+    ## ACTIVE DOWNLOAD ?##
+    # Script checks for active download it will loop here until download is complete
+    while True:
+        complete = queuedata.count("<noofslots>0</noofslots>")
+        if complete != 1:
+            Logger.info('- SABnzbd: Downloading...')
+            time.sleep(300)
+            
+            # reload queue or loop will be stuck with old data from first read
+            queue = urllib2.urlopen(url)
+            queuedata = queue.read()
+            queue.close()
+            
+        # triger to continue    
+        if complete == 1:
+            Logger.info('- SABnzbd: No active downloads. ')
+            break
+            
+    ## HISTORY - POSTPROCESSING ACTIVE ?##
+    
+    # Get URL for Post-Processing Status
+    url = get_url(http_address, 'history', 'json', apikey)
+        
+    while True:
+        history = urllib2.Request(url)
+        response = urllib2.urlopen(history)
+        historydata = response.read()
+        
+        ##looking for stuff we need in history
+        Postprocesing = historydata.count('Repairing') or historydata.count('Unpacking') or historydata.count('Verifying')
+        Repairing = historydata.count('Repairing')
+        Unpacking = historydata.count('Unpacking')
+        Verifying = historydata.count('Verifying')
+        
+        ##logging 
+        if Repairing >= 1 or Unpacking >= 1 or Verifying >= 1 or Postprocesing  >= 1:
+        #    Logger.info('- SABnzbd: Repairing files...')
+        #elif Unpacking >= 1:
+        #    Logger.info('- SABnzbd: Unpacking files...')
+        #elif Verifying >= 1:
+        #    Logger.info('- SABnzbd: Verifying files...')
+        #if Postprocesing  >= 1:
+            Logger.info('- SABnzbd is post-processing...')
+            ## loop script while sab is doing something with files
+            # time.sleep(120)
+            return 2            
+        else: 
+            Logger.info('- SABnzbd: Finished all jobs.')
+            return 0 

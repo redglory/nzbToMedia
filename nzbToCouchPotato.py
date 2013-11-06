@@ -205,6 +205,7 @@ if os.environ.has_key('NZBOP_SCRIPTDIR') and not os.environ['NZBOP_VERSION'][0:5
     Logger.info("Script triggered from NZBGet, starting autoProcessMovie...")
     clientAgent = "nzbget"
     result = autoProcessMovie.process(os.environ['NZBPP_DIRECTORY'], os.environ['NZBPP_NZBNAME'], status, clientAgent, download_id)
+
 # SABnzbd
 elif len(sys.argv) == SABNZB_NO_OF_ARGUMENTS:
     # SABnzbd argv:
@@ -217,6 +218,7 @@ elif len(sys.argv) == SABNZB_NO_OF_ARGUMENTS:
     # 7 Status of post processing. 0 = OK, 1=failed verification, 2=failed unpack, 3=1+2
     Logger.info("Script triggered from SABnzbd, starting autoProcessMovie...")
     clientAgent = "sabnzbd"
+    Logger.info('SABnzbd command-line arguments ( ' + str(len(sys.argv)) + ' ): ' + str(sys.argv)) 
     result = autoProcessMovie.process(sys.argv[1], sys.argv[2], sys.argv[7], clientAgent)
 else:
     Logger.warn("Invalid number of arguments received from client.")
@@ -225,7 +227,25 @@ else:
     result = autoProcessMovie.process('Manual Run', 'Manual Run', 0, clientAgent)
 
 if result == 0:
-    Logger.info("MAIN: The autoProcessMovie script completed successfully.")
+    # Logger.info("Checking SABnzbd status...")
+    # autoProcessMovie.check_sabnzbd()
+    # Run Ember Media Manager to scrapre additional data
+    Logger.info("Launching Ember Media Manager to scrape additional data...")
+    result = autoProcessMovie.run_ember()
+    if result == 0:
+        # SUCCESS: Ember Media Manager ran successfully!
+        Logger.info("Ember Media Manager ran successfully.")
+        # Update XBMC Video Library
+        Logger.info("Building XBMC JSON Object")
+        xbmc = autoProcessMovie.get_xbmc_json_obj()
+        Logger.info("Update XBMC Video Library...")
+        autoProcessMovie.update_videolibrary(xbmc)
+        # SUCCESS: autoProcessMovie script ran successfully!
+        Logger.info("The autoProcessMovie script completed successfully.")
+    else:
+        # FAILURE: Ember Media Manager didn't run as expected!
+        Logger.info("Ember Media Manager didn't run as expected!")
+        Logger.info("MUST Run Ember Media Manager manually before updating XBMC Video Library!")
     if os.environ.has_key('NZBOP_SCRIPTDIR'): # return code for nzbget v11
         sys.exit(POSTPROCESS_SUCCESS)
 else:
